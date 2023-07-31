@@ -1,0 +1,358 @@
+
+```{r}
+library(randomForest)
+library(pls)
+```
+
+```{r}
+run_model <- function(param){
+
+  
+Input <- CreateInputsModel(FUN_MOD = RunModel_CemaNeigeGR4J,
+                           DatesR = as.POSIXlt(BasinObs$DatesR),
+                           Precip = BasinObs$P,
+                           PotEvap = BasinObs$Emed,
+                           TempMean = BasinObs$Tmean,
+                           ZInputs = ZInputs,
+                           HypsoData = hypso,
+                           NLayers = 5)
+
+Run_calib <- CreateRunOptions(FUN_MOD = RunModel_CemaNeigeGR4J,InputsModel = Input, IndPeriod_Run = calib_period,IndPeriod_WarmUp = warmup_period)
+
+Run_valid <- CreateRunOptions(FUN_MOD = RunModel_CemaNeigeGR4J,InputsModel = Input, IndPeriod_Run = valid_period)
+
+
+Crit_cal <- CreateInputsCrit(FUN_CRIT = ErrorCrit_NSE,InputsModel = Input, RunOptions = Run_calib, Obs = BasinObs$Qmm[calib_period])
+
+Crit_val <- CreateInputsCrit(FUN_CRIT = ErrorCrit_NSE,InputsModel = Input, RunOptions = Run_valid, Obs = BasinObs$Qmm[valid_period])
+
+params=param
+
+sim_calib <- RunModel_CemaNeigeGR4J(InputsModel=Input,RunOptions=Run_calib,Param = params)
+
+sim_valid <- RunModel_CemaNeigeGR4J(InputsModel = Input, RunOptions = Run_valid, Param = params)
+
+cal <- ErrorCrit_NSE(InputsCrit = Crit_cal,OutputsModel = sim_calib)$CritValue
+
+val <- ErrorCrit_NSE(InputsCrit = Crit_val,OutputsModel = sim_valid)$CritValue
+
+return(c(cal,val,param))
+}
+```
+
+
+```{r Prepare data}
+data <- NSE_final %>% left_join(df,by=c("st.id"="st.index")) %>% select(c(1:6,13,17:39))
+```
+
+
+```{r RandomForest}
+test_RF <- data.frame()
+for (stn in stns){
+    load(glue("E:/Project/GR4JCN/BasinObs/{stn}.Rda")) 
+    Input <- CreateInputsModel(FUN_MOD = RunModel_CemaNeigeGR4J,
+                           DatesR = as.POSIXlt(BasinObs$DatesR),
+                           Precip = BasinObs$P,
+                           PotEvap = BasinObs$Emed,
+                           TempMean = BasinObs$Tmean,
+                           ZInputs = ZInputs,
+                           HypsoData = hypso,
+                           NLayers = 5)
+    Run_calib <- CreateRunOptions(FUN_MOD = RunModel_CemaNeigeGR4J,InputsModel = Input, IndPeriod_Run = calib_period,IndPeriod_WarmUp = warmup_period)
+
+Run_valid <- CreateRunOptions(FUN_MOD = RunModel_CemaNeigeGR4J,InputsModel = Input, IndPeriod_Run = valid_period)
+
+Crit_cal <- CreateInputsCrit(FUN_CRIT = ErrorCrit_NSE,InputsModel = Input, RunOptions = Run_calib, Obs = BasinObs$Qmm[calib_period])
+
+Crit_val <- CreateInputsCrit(FUN_CRIT = ErrorCrit_NSE,InputsModel = Input, RunOptions = Run_valid, Obs = BasinObs$Qmm[valid_period])
+      
+        params <-  c()
+        for (i in 1:6){
+      data_train <- data %>% filter(st.id != stn) %>% select(c(i,8:30))
+      data_test <- data %>% filter(st.id == stn)%>% select(c(8:30))
+      set.seed(111)
+      r <- randomForest(as.formula(glue("{colnames(data_train)[1]}~.")),data=data_train)
+      params=append(params,predict(r,data_test))}
+        
+      sim_calib <- RunModel_CemaNeigeGR4J(InputsModel=Input,RunOptions=Run_calib,Param = params)
+
+    sim_valid <- RunModel_CemaNeigeGR4J(InputsModel = Input, RunOptions = Run_valid, Param = params)
+
+cal <- ErrorCrit_NSE(InputsCrit = Crit_cal,OutputsModel = sim_calib)$CritValue
+
+val <- ErrorCrit_NSE(InputsCrit = Crit_val,OutputsModel = sim_valid)$CritValue
+    
+test_RF <- test_RF %>% bind_rows(data.frame(st.id = stn,
+                                      calib = cal,
+                                      valid = val, 
+                                      params = I(list(params))))
+        }
+```
+
+
+```{r PCR}
+
+test_PCR <- data.frame()
+for (stn in stns){ 
+  load(glue("E:/Project/GR4JCN/BasinObs/{stn}.Rda")) 
+    Input <- CreateInputsModel(FUN_MOD = RunModel_CemaNeigeGR4J,
+                           DatesR = as.POSIXlt(BasinObs$DatesR),
+                           Precip = BasinObs$P,
+                           PotEvap = BasinObs$Emed,
+                           TempMean = BasinObs$Tmean,
+                           ZInputs = ZInputs,
+                           HypsoData = hypso,
+                           NLayers = 5)
+    Run_calib <- CreateRunOptions(FUN_MOD = RunModel_CemaNeigeGR4J,InputsModel = Input, IndPeriod_Run = calib_period,IndPeriod_WarmUp = warmup_period)
+
+Run_valid <- CreateRunOptions(FUN_MOD = RunModel_CemaNeigeGR4J,InputsModel = Input, IndPeriod_Run = valid_period)
+
+
+Crit_cal <- CreateInputsCrit(FUN_CRIT = ErrorCrit_NSE,InputsModel = Input, RunOptions = Run_calib, Obs = BasinObs$Qmm[calib_period])
+
+Crit_val <- CreateInputsCrit(FUN_CRIT = ErrorCrit_NSE,InputsModel = Input, RunOptions = Run_valid, Obs = BasinObs$Qmm[valid_period])
+        params <- c()
+        for (i in 1:6){
+        data_train <- data %>% filter(st.id != stn) %>% select(c(i,8:30,-13))
+      data_test <- data %>% filter(st.id == stn)%>% select(c(8:30,-13))
+        pcr_model <- pcr(as.formula(glue("{colnames(data_train)[1]}~.")), data = data_train, center=T, scale = TRUE, validation = "CV")
+    params=append(params,predict(pcr_model,data_test, ncomp=5)[1])
+        }
+    sim_calib <- RunModel_CemaNeigeGR4J(InputsModel=Input,RunOptions=Run_calib,Param = params)
+
+    sim_valid <- RunModel_CemaNeigeGR4J(InputsModel = Input, RunOptions = Run_valid, Param = params)
+
+cal <- ErrorCrit_NSE(InputsCrit = Crit_cal,OutputsModel = sim_calib)$CritValue
+
+val <- ErrorCrit_NSE(InputsCrit = Crit_val,OutputsModel = sim_valid)$CritValue
+    
+test_PCR <- test_PCR %>% bind_rows(data.frame(st.id = stn,
+                                      calib = cal,
+                                      valid = val, 
+                                      params = I(list(params))))    
+        }
+```
+
+```{r}
+edc <- data.frame(P=seq(1,0,-0.01))
+for (stn in stns){
+  load(glue("E:/Project/GR4JCN/BasinObs/{stn}.Rda"))
+  Input <- CreateInputsModel(FUN_MOD = RunModel_CemaNeigeGR4J,
+                             DatesR = as.POSIXlt(BasinObs$DatesR), 
+                             Precip = BasinObs$P,
+                             PotEvap = BasinObs$Emed,
+                             TempMean = BasinObs$Tmean,
+                             ZInputs = ZInputs,
+                             HypsoData = hypso, 
+                             NLayers = 5)
+  
+  Run_calib <- CreateRunOptions(FUN_MOD = RunModel_CemaNeigeGR4J,InputsModel = Input, IndPeriod_Run = calib_period,IndPeriod_WarmUp = warmup_period)
+
+  Run_valid <- CreateRunOptions(FUN_MOD = RunModel_CemaNeigeGR4J,InputsModel = Input, IndPeriod_Run = valid_period)
+  
+  params=(log_PS %>% filter(st.id==stn))$params[[1]]
+  sim_calib <- RunModel_CemaNeigeGR4J(InputsModel=Input,RunOptions=Run_calib,Param = params)
+
+  sim_valid <- RunModel_CemaNeigeGR4J(InputsModel = Input, RunOptions = Run_valid, Param = params)
+
+  Qsim <- c(sim_calib$Qsim,sim_valid$Qsim)
+  Qobs <- BasinObs$Qmm[c(calib_period,valid_period)]
+  Qdat <- data.frame(Date=BasinObs$DatesR[c(calib_period,valid_period)],
+                        Simulated = Qsim,
+                        Observed = Qobs) %>% drop_na()
+  err <- data.frame(obs=quantile(Qdat$Observed,probs = seq(0,1,0.01),type=1),sim=quantile(Qdat$Simulated,probs = seq(0,1,0.01),type=1)) %>% mutate(err=sim/obs)
+  
+  edc <- edc %>% bind_cols(err %>% select(3))
+}
+colnames(edc) <- c("P",stns)
+edc[1,4]=NA
+edc_plot <- edc %>% rowwise() %>% mutate(median=median(c_across(cols=-1),na.rm = T)) %>% pivot_longer(cols=-1,names_to="stn",values_to = "error")
+
+edc_plot <- edc_plot %>% mutate(type=case_when(stn=="median"~"median",
+                                               stn=="max"~"max",
+                                               stn=="min"~"min",
+                                               TRUE~"others"))
+
+```
+
+```{r}
+ci <- edc_plot %>% filter(type=="others")
+ci <- ci %>% group_by(P) %>% summarise(median=MedianCI(error, conf.level = 0.5)[["median"]],
+                                       lower1=MedianCI(error, conf.level = 0.5)[["lwr.ci"]],
+                                       upper1=MedianCI(error, conf.level = 0.5)[["upr.ci"]],
+                                       lower2=MedianCI(error, conf.level = 0.8)[["lwr.ci"]],
+                                       upper2=MedianCI(error, conf.level = 0.8)[["upr.ci"]])
+
+                                       
+```
+
+##3. Spatial Proximity: `SP` conains results of single-donor parameter transfer
+```{r SP}
+
+coords <- read_csv("E:/Project/GR4JCN/xy.csv") %>% filter(!st_id %in% c(440,630))
+
+#test_SP <- data.frame()
+test_SP_out <- data.frame()
+for (stn in stns){
+  dist <- data.frame(stn = coords$st_id, dist=flexclust::dist2(coords %>% select(-1),coords %>% filter(st_id==stn) %>% select(-1))) %>% arrange(dist)
+  
+  donor = dist$stn[2]
+  
+  load(glue("E:/Project/GR4JCN/BasinObs/{stn}.Rda")) 
+    Input <- CreateInputsModel(FUN_MOD = RunModel_CemaNeigeGR4J,
+                           DatesR = as.POSIXlt(BasinObs$DatesR),
+                           Precip = BasinObs$P,
+                           PotEvap = BasinObs$Emed,
+                           TempMean = BasinObs$Tmean,
+                           ZInputs = ZInputs,
+                           HypsoData = hypso,
+                           NLayers = 5)
+    Run_calib <- CreateRunOptions(FUN_MOD = RunModel_CemaNeigeGR4J,InputsModel = Input, IndPeriod_Run = calib_period,IndPeriod_WarmUp = warmup_period)
+
+Run_valid <- CreateRunOptions(FUN_MOD = RunModel_CemaNeigeGR4J,InputsModel = Input, IndPeriod_Run = valid_period)
+
+
+Crit_cal <- CreateInputsCrit(FUN_CRIT = ErrorCrit_NSE,InputsModel = Input, RunOptions = Run_calib, Obs = BasinObs$Qmm[calib_period])
+
+Crit_val <- CreateInputsCrit(FUN_CRIT = ErrorCrit_NSE,InputsModel = Input, RunOptions = Run_valid, Obs = BasinObs$Qmm[valid_period])
+  
+  params = (NSE_final %>% filter(st.id==donor))$params[[1]]
+  
+  sim_calib <- RunModel_CemaNeigeGR4J(InputsModel=Input,RunOptions=Run_calib,Param = params)
+
+    sim_valid <- RunModel_CemaNeigeGR4J(InputsModel = Input, RunOptions = Run_valid, Param = params)
+
+cal <- ErrorCrit_NSE(InputsCrit = Crit_cal,OutputsModel = sim_calib)$CritValue
+
+val <- ErrorCrit_NSE(InputsCrit = Crit_val,OutputsModel = sim_valid)$CritValue
+    
+test_SP <- test_SP %>% bind_rows(data.frame(st.id = stn,
+                                      calib = cal,
+                                      valid = val, 
+                                      params = I(list(params)),
+                                      donor=donor)) 
+}
+```
+
+#Physical Similarity - PCA
+```{r PS}
+test_PS_raw <- data.frame()
+df_raw <- NSE_OS %>% select(13:14) %>% left_join(df,by=c("st.id"="st.index"))
+df_scaled <- as.data.frame(scale(df_raw %>% select(-c(1:4,10)))) %>% mutate(st.id=df_raw$st.id)
+pca<-prcomp(df_raw %>% select(-c(1:4,10)), center=T, scale.=T, rank. = 5)
+pca_scaled <- as.data.frame(scale(pca$x)) %>% mutate(st.id=stns)
+
+test_df <- data.frame()
+for (stn in stns){
+  #dist <- data.frame(stn=pca_scaled$st.id,dist=flexclust::dist2(pca_scaled %>% select(-6),pca_scaled %>% filter(st.id==stn) %>% select(-6),method="man"))%>% arrange(dist)
+  dist <- data.frame(stn=df_scaled$st.id,dist=flexclust::dist2(df_scaled %>% select(-23),df_scaled %>% filter(st.id==stn) %>% select(-23),method="man"))%>% arrange(dist)
+  donor = dist$stn[2]
+  test_df <- test_df %>% bind_rows(data.frame(st.id=stn,donor=donor))
+  load(glue("E:/Project/GR4JCN/BasinObs/{stn}.Rda")) 
+    Input <- CreateInputsModel(FUN_MOD = RunModel_CemaNeigeGR4J,
+                           DatesR = as.POSIXlt(BasinObs$DatesR),
+                           Precip = BasinObs$P,
+                           PotEvap = BasinObs$Emed,
+                           TempMean = BasinObs$Tmean,
+                           ZInputs = ZInputs,
+                           HypsoData = hypso,
+                           NLayers = 5)
+    Run_calib <- CreateRunOptions(FUN_MOD = RunModel_CemaNeigeGR4J,InputsModel = Input, IndPeriod_Run = calib_period,IndPeriod_WarmUp = warmup_period)
+
+Run_valid <- CreateRunOptions(FUN_MOD = RunModel_CemaNeigeGR4J,InputsModel = Input, IndPeriod_Run = valid_period)
+
+
+Crit_cal <- CreateInputsCrit(FUN_CRIT = ErrorCrit_NSE,InputsModel = Input, RunOptions = Run_calib, Obs = BasinObs$Qmm[calib_period])
+
+Crit_val <- CreateInputsCrit(FUN_CRIT = ErrorCrit_NSE,InputsModel = Input, RunOptions = Run_valid, Obs = BasinObs$Qmm[valid_period])
+  
+  params = (NSE_OS %>% filter(st.id==donor))$params[[1]]
+  
+  sim_calib <- RunModel_CemaNeigeGR4J(InputsModel=Input,RunOptions=Run_calib,Param = params)
+
+    sim_valid <- RunModel_CemaNeigeGR4J(InputsModel = Input, RunOptions = Run_valid, Param = params)
+
+cal <- ErrorCrit_NSE(InputsCrit = Crit_cal,OutputsModel = sim_calib)$CritValue
+
+val <- ErrorCrit_NSE(InputsCrit = Crit_val,OutputsModel = sim_valid)$CritValue
+    
+test_PS_raw <- test_PS_raw %>% bind_rows(data.frame(st.id = stn,
+                                      calib = cal,
+                                      valid = val, 
+                                      params = I(list(params)),
+                                      donor=donor))
+}
+```
+
+# SP_out
+```{r SP-out}
+out_avg_SP <- data.frame()
+#stn = 690
+  
+  
+  
+for (stn in stns){
+  #dist <- data.frame(stn=pca_scaled$st.id,dist=flexclust::dist2(pca_scaled %>% select(-6),pca_scaled %>% filter(st.id==stn) %>% select(-6),method="man"))%>% arrange(dist)
+  dist <- data.frame(stn = coords$st_id, dist=flexclust::dist2(coords %>% select(-1),coords %>% filter(st_id==stn) %>% select(-1))) %>% arrange(dist)
+  load(glue("E:/Project/GR4JCN/BasinObs/{stn}.Rda")) 
+  
+  test_PS_out <- data.frame(Date=c(BasinObs$DatesR[calib_period],BasinObs$DatesR[valid_period]),Qobs=c(BasinObs$Qmm[calib_period],BasinObs$Qmm[valid_period]))
+  
+    Input <- CreateInputsModel(FUN_MOD = RunModel_CemaNeigeGR4J,
+                           DatesR = as.POSIXlt(BasinObs$DatesR),
+                           Precip = BasinObs$P,
+                           PotEvap = BasinObs$Emed,
+                           TempMean = BasinObs$Tmean,
+                           ZInputs = ZInputs,
+                           HypsoData = hypso,
+                           NLayers = 5)
+    Run_calib <- CreateRunOptions(FUN_MOD = RunModel_CemaNeigeGR4J,InputsModel = Input, IndPeriod_Run = calib_period,IndPeriod_WarmUp = warmup_period)
+
+Run_valid <- CreateRunOptions(FUN_MOD = RunModel_CemaNeigeGR4J,InputsModel = Input, IndPeriod_Run = valid_period)
+
+
+Crit_cal <- CreateInputsCrit(FUN_CRIT = ErrorCrit_NSE,InputsModel = Input, RunOptions = Run_calib, Obs = BasinObs$Qmm[calib_period])
+
+Crit_val <- CreateInputsCrit(FUN_CRIT = ErrorCrit_NSE,InputsModel = Input, RunOptions = Run_valid, Obs = BasinObs$Qmm[valid_period])
+  
+for (donor in dist$stn){
+  params = (NSE_final %>% filter(st.id==donor))$params[[1]]
+  
+  sim_calib <- RunModel_CemaNeigeGR4J(InputsModel=Input,RunOptions=Run_calib,Param = params)
+
+  sim_valid <- RunModel_CemaNeigeGR4J(InputsModel = Input, RunOptions = Run_valid, Param = params)
+  
+  calib_NSE <- ErrorCrit_NSE(InputsCrit = Crit_cal,OutputsModel = sim_calib)$CritValue
+  
+  valid_NSE <- ErrorCrit_NSE(InputsCrit = Crit_val,OutputsModel = sim_valid)$CritValue
+  
+  
+  test_PS_out <- test_PS_out %>% bind_cols(c(sim_calib$Qsim,sim_valid$Qsim))
+}  
+
+colnames(test_PS_out) <- c("Date","Qobs",dist$stn)
+
+results_OA <- reduce(4:25, ~mutate(.x, !!paste0("D", .y-3) := mean(c_across(4:.y))), .init = rowwise(test_PS_out))
+
+out_avg_SP <- out_avg_SP %>% bind_rows(results_OA %>% select(26:47) %>% map_df(~NSE(.,results_OA$Qobs)))
+}
+
+```
+
+```{r, fig.width=4}
+med_PS <- out_avg_PS %>% map_df(~median(.)) %>%  pivot_longer(cols=1:22,names_to="donors",values_to = "NSE") %>% mutate(method="PS")
+
+med_SP <- out_avg_SP %>% map_df(~median(.)) %>% pivot_longer(cols=1:22,names_to="donors",values_to="NSE") %>% mutate(method="SP")
+
+OA <- med_PS %>% bind_rows(med_SP)
+
+ggplot(OA)+
+  geom_line(aes(x=fct_relevel(donors,c("D1","D2","D3","D4","D5","D6","D7","D8","D9","D10")),y=NSE,group=method,linetype=method),size=0.9)+
+  geom_point(aes(x=fct_relevel(donors,c("D1","D2","D3","D4","D5","D6","D7","D8","D9","D10")),y=NSE,group=method),size=2,shape=21)+
+  scale_x_discrete(breaks=c("D1","D2","D3","D4","D5","D10","D15","D20"),labels=c(1,2,3,4,5,10,15,20),name="No. of donors")+
+  scale_y_continuous(limits=c(0.58,0.7),breaks=seq(0.58,0.7,0.02))+
+  theme_bw()+
+  theme(legend.title=element_blank(),
+        legend.position=c(0.9,0.2),
+        legend.background = element_blank())
+```

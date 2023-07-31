@@ -1,0 +1,273 @@
+# DataAltiExtrapolation_NPL: Create a custom function by changing some values of original function 
+
+```{r}
+DataAltiExtrapolation_NPL <- function (DatesR, Precip, PrecipScale = TRUE, TempMean, TempMin = NULL, 
+  TempMax = NULL, ZInputs, HypsoData, NLayers,GradT=lr, verbose = TRUE) 
+{
+  GradP_Valery2010 <- 0
+  HypsoData <- as.double(HypsoData)
+  ZInputs <- as.double(ZInputs)
+  ZLayers <- as.double(rep(NA, NLayers))
+  if (!identical(HypsoData, as.double(rep(NA, 101)))) {
+    nmoy <- 100%/%NLayers
+    nreste <- 100%%NLayers
+    ncont <- 0
+    for (iLayer in 1:NLayers) {
+      if (nreste > 0) {
+        nn <- nmoy + 1
+        nreste <- nreste - 1
+      }
+      else {
+        nn <- nmoy
+      }
+      if (nn == 1) {
+        ZLayers[iLayer] <- HypsoData[ncont + 1]
+      }
+      if (nn == 2) {
+        ZLayers[iLayer] <- 0.5 * (HypsoData[ncont + 
+          1] + HypsoData[ncont + 2])
+      }
+      if (nn > 2) {
+        ZLayers[iLayer] <- HypsoData[ncont + nn/2 + 
+          1]
+      }
+      ncont <- ncont + nn
+    }
+  }
+  if (identical(ZInputs, HypsoData[51]) & NLayers == 1) {
+    LayerPrecip <- list(as.double(Precip))
+  }
+  else {
+    GradP <- GradP_Valery2010
+    TabGradP <- rep(GradP, length(Precip))
+    Zthreshold <- 4000
+    LayerPrecip_mat <- sapply(1:NLayers, function(iLayer) {
+      if (ZLayers[iLayer] <= Zthreshold) {
+        prcp <- as.double(Precip * exp(TabGradP * (ZLayers[iLayer] - 
+          ZInputs)))
+      }
+      else {
+        if (ZInputs <= Zthreshold) {
+          prcp <- as.double(Precip * exp(TabGradP * 
+            (Zthreshold - ZInputs)))
+        }
+        else {
+          prcp <- as.double(Precip)
+        }
+      }
+      return(prcp)
+    })
+    if (PrecipScale) {
+      LayerPrecip_mat <- LayerPrecip_mat/rowMeans(LayerPrecip_mat) * 
+        Precip
+      LayerPrecip_mat[is.nan(LayerPrecip_mat)] <- 0
+    }
+    LayerPrecip <- as.list(as.data.frame(LayerPrecip_mat))
+  }
+  LayerTempMean <- list()
+  LayerTempMin <- list()
+  LayerTempMax <- list()
+  if (identical(ZInputs, HypsoData[51]) & NLayers == 1) {
+    LayerTempMean[[1]] <- as.double(TempMean)
+    if (!is.null(TempMin) & !is.null(TempMax)) {
+      LayerTempMin[[1]] <- as.double(TempMin)
+      LayerTempMax[[1]] <- as.double(TempMax)
+    }
+  }
+  else {
+    #GradT <- GradT
+    for (iLayer in 1:NLayers) {
+      LayerTempMean[[iLayer]] <- as.double(TempMean + 
+        (ZInputs - ZLayers[iLayer]) * GradT)
+      if (!is.null(TempMin) & !is.null(TempMax)) {
+        LayerTempMin[[iLayer]] <- as.double(TempMin + 
+          (ZInputs - ZLayers[iLayer]) * GradT)
+        LayerTempMax[[iLayer]] <- as.double(TempMax + 
+          (ZInputs - ZLayers[iLayer]) * GradT)
+      }
+    }
+  }
+  LayerFracSolidPrecip <- list()
+  Zthreshold <- 1500
+  Option <- "USACE"
+  if (!is.na(ZInputs)) {
+    if (ZInputs < Zthreshold & !is.null(TempMin) & !is.null(TempMax)) {
+      Option <- "Hydrotel"
+    }
+  }
+  for (iLayer in 1:NLayers) {
+    if (Option == "Hydrotel") {
+      TempMin <- LayerTempMin[[iLayer]]
+      TempMax <- LayerTempMax[[iLayer]]
+      SolidFraction <- 1 - TempMax/(TempMax - TempMin)
+      SolidFraction[TempMin >= 0] <- 0
+      SolidFraction[TempMax <= 0] <- 1
+    }
+    if (Option == "USACE") {
+      USACE_Tmin <- -1
+      USACE_Tmax <- 3
+      TempMean <- LayerTempMean[[iLayer]]
+      SolidFraction <- 1 - (TempMean - USACE_Tmin)/(USACE_Tmax - 
+        USACE_Tmin)
+      SolidFraction[TempMean > USACE_Tmax] <- 0
+      SolidFraction[TempMean < USACE_Tmin] <- 1
+    }
+    LayerFracSolidPrecip[[iLayer]] <- as.double(SolidFraction)
+  }
+  namesLayer <- sprintf("L%i", seq_along(LayerPrecip))
+  names(LayerPrecip) <- namesLayer
+  names(LayerTempMean) <- namesLayer
+  if (!is.null(TempMin) & !is.null(TempMax)) {
+    names(LayerTempMin) <- namesLayer
+    names(LayerTempMax) <- namesLayer
+  }
+  names(LayerFracSolidPrecip) <- namesLayer
+  return(list(LayerPrecip = LayerPrecip, LayerTempMean = LayerTempMean, 
+    LayerTempMin = LayerTempMin, LayerTempMax = LayerTempMax, 
+    LayerFracSolidPrecip = LayerFracSolidPrecip, ZLayers = ZLayers))
+}
+```
+
+# Next, assign the custom function to the package and assign original function to custom function.
+# The call to environment() assures that the function will be able to call other hidden functions from the package.
+
+# The call to assignInNamespace() assures that other functions from the package will call your updated version of the function.
+# See: https://stackoverflow.com/questions/24331690/modify-package-function
+
+```{r}
+environment(DataAltiExtrapolation_NPL)<- asNamespace('airGR')
+assignInNamespace("DataAltiExtrapolation_Valery", DataAltiExtrapolation_NPL, ns = "airGR")
+```
+DERIVE HYPSOMETRY
+```{r}
+hypso_df <- read_csv(glue::glue("E:/Project/GR4JCN/hypso/{stn}.csv"))
+
+ggplot(hypso_df)+
+  geom_line(aes(Elevation,Area))
+hypso <- data.frame()
+for (i in 1:99){
+  hypso <- hypso %>% bind_rows(hypso_df %>% filter(abs(Area-i)==min(abs(Area-i))))}
+
+le <- 320
+he <- 3613
+hypso <- c(le,hypso$Elevation,he) 
+```
+
+#Add Temperature Data to BasinObs
+
+```{r}
+lr <- 0.0052 #Lapse-rate
+df_fill <- read_csv("E:/Project/BasinData/Inputs/temp_filled.csv")
+
+basin_temp <- df_fill %>% filter(stn==1206) %>% rowwise() %>% mutate(Tmean=mean(c(Tmax,Tmin),na.rm=T)) %>% filter(year(Date) %in% c(2000:2015))
+
+BasinObs$Tmean <- temp$Tavg
+
+ZInputs = 684
+BasinObs <- BasinObs %>% mutate(Tmed=Tmean+(median(hypso)-ZInputs)*(-lr))
+
+Lat = 28.27
+BasinObs <- BasinObs %>% mutate(Emed = PE_Oudin(as.POSIXlt(DatesR)$yday+1,
+                                 Temp=Tmed,
+                                 Lat=Lat,
+                                 LatUnit="deg"))
+```
+
+## preparation of the InputsModel object
+
+```{r}
+Input <- CreateInputsModel(FUN_MOD = RunModel_CemaNeigeGR4J,
+                                 DatesR = as.POSIXlt(BasinObs$DatesR), Precip = BasinObs$P,
+                                , PotEvap = BasinObs$Emed, TempMean = BasinObs$Tmean,
+                                 ZInputs = ZInputs,
+                                 HypsoData = hypso, NLayers = 5)
+```
+
+## ---- calibration step
+
+```{r}
+## calibration period selection
+warmup_period <- seq(which(format(BasinObs$DatesR, format = "%Y-%m-%d") == "2000-01-01"),which(format(BasinObs$DatesR, format = "%Y-%m-%d") == "2000-12-31"))
+
+calib_period <- seq(which(format(BasinObs$DatesR, format = "%Y-%m-%d") == "2001-01-01"),which(format(BasinObs$DatesR, format = "%Y-%m-%d") == "2006-12-31"))
+
+valid_period <- seq(which(format(BasinObs$DatesR, format = "%Y-%m-%d") == "2007-01-01"),which(format(BasinObs$DatesR, format = "%Y-%m-%d") == "2010-12-31"))
+
+Run_calib <- CreateRunOptions(FUN_MOD = RunModel_CemaNeigeGR4J,InputsModel = Input, IndPeriod_Run = calib_period,IndPeriod_WarmUp = warmup_period)
+
+Run_valid <- CreateRunOptions(FUN_MOD = RunModel_CemaNeigeGR4J,InputsModel = Input, IndPeriod_Run = valid_period)
+```
+
+```{r}
+Crit_cal <- CreateInputsCrit(FUN_CRIT = ErrorCrit_NSE,InputsModel = Input, RunOptions = Run_calib, Obs = BasinObs$Qmm[calib_period])
+
+Crit_val <- CreateInputsCrit(FUN_CRIT = ErrorCrit_NSE,InputsModel = Input, RunOptions = Run_valid, Obs = BasinObs$Qmm[valid_period])
+```
+
+```{r}
+# Define Calibration algorithm and calibrate
+glomean <- data.frame()
+for (stn in stns){
+  load(glue("E:/Project/GR4JCN/BasinObs/{stn}.Rda"))
+  Input <- CreateInputsModel(FUN_MOD = RunModel_CemaNeigeGR4J,
+                                 DatesR = as.POSIXlt(BasinObs$DatesR), Precip = BasinObs$P,
+                                , PotEvap = BasinObs$Emed, TempMean = BasinObs$Tmean,
+                                 ZInputs = ZInputs,
+                                 HypsoData = hypso, NLayers = 5)
+
+Run_calib <- CreateRunOptions(FUN_MOD = RunModel_CemaNeigeGR4J,InputsModel = Input, IndPeriod_Run = calib_period,IndPeriod_WarmUp = warmup_period)
+
+Run_valid <- CreateRunOptions(FUN_MOD = RunModel_CemaNeigeGR4J,InputsModel = Input, IndPeriod_Run = valid_period)
+
+
+Crit_cal <- CreateInputsCrit(FUN_CRIT = ErrorCrit_NSE,InputsModel = Input, RunOptions = Run_calib, Obs = BasinObs$Qmm[calib_period])
+
+Crit_val <- CreateInputsCrit(FUN_CRIT = ErrorCrit_NSE,InputsModel = Input, RunOptions = Run_valid, Obs = BasinObs$Qmm[valid_period])
+
+params = params_glom
+
+sim_calib <- RunModel_CemaNeigeGR4J(InputsModel=Input,RunOptions=Run_calib,Param = params)
+
+sim_valid <- RunModel_CemaNeigeGR4J(InputsModel = Input, RunOptions = Run_valid, Param = params)
+
+calib_NSE <- ErrorCrit_NSE(InputsCrit = Crit_cal,OutputsModel = sim_calib)$CritValue
+
+valid_NSE <- ErrorCrit_NSE(InputsCrit = Crit_val,OutputsModel = sim_valid)$CritValue
+
+glomean <- glomean %>% bind_rows(data.frame(stn=stn,cal=calib_NSE,val=valid_NSE,params=I(list(as.vector(params)))))
+}
+```
+
+```{r}
+# Run model in calibration and validation periods
+results <- data.frame()
+for (stn in stns){
+  load(glue("E:/Project/GR4JCN/BasinObs/{stn}.Rda"))
+  Input <- CreateInputsModel(FUN_MOD = RunModel_CemaNeigeGR4J,
+                                 DatesR = as.POSIXlt(BasinObs$DatesR), Precip = BasinObs$P,
+                                , PotEvap = BasinObs$Emed, TempMean = BasinObs$Tmean,
+                                 ZInputs = ZInputs,
+                                 HypsoData = hypso, NLayers = 5)
+  Run_calib <- CreateRunOptions(FUN_MOD = RunModel_CemaNeigeGR4J,InputsModel = Input, IndPeriod_Run = calib_period,IndPeriod_WarmUp = warmup_period)
+
+  Run_valid <- CreateRunOptions(FUN_MOD = RunModel_CemaNeigeGR4J,InputsModel = Input, IndPeriod_Run = valid_period)
+  
+  Crit_cal <- CreateInputsCrit(FUN_CRIT = ErrorCrit_NSE,InputsModel = Input, RunOptions = Run_calib, Obs = BasinObs$Qmm[calib_period])
+
+  Crit_val <- CreateInputsCrit(FUN_CRIT = ErrorCrit_NSE,InputsModel = Input, RunOptions = Run_valid, Obs = BasinObs$Qmm[valid_period])
+  
+  params= (test_PS %>% filter(st.id==115))$params[[1]] 
+
+  sim_calib <- RunModel_CemaNeigeGR4J(InputsModel=Input,RunOptions=Run_calib,Param = params)
+
+  sim_valid <- RunModel_CemaNeigeGR4J(InputsModel = Input, RunOptions = Run_valid, Param = params)
+
+  calib_NSE <- ErrorCrit_NSE(InputsCrit = Crit_cal,OutputsModel = sim_calib)$CritValue
+  
+  valid_NSE <- ErrorCrit_NSE(InputsCrit = Crit_val,OutputsModel = sim_valid)$CritValue
+  
+  results <- results %>% bind_rows(data.frame(stn=stn,cal=calib_NSE,val=valid_NSE))
+}
+```
+
+
