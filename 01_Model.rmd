@@ -1,3 +1,12 @@
+# Load libraries
+library(airGR)
+library(tidyverse)
+library(hydroGOF)
+library(patchwork)
+library(glue)
+library(randomForest)
+library(pls)
+
 # DataAltiExtrapolation_NPL: Create a custom function by changing some values of original function 
 
 ```{r}
@@ -138,7 +147,7 @@ DataAltiExtrapolation_NPL <- function (DatesR, Precip, PrecipScale = TRUE, TempM
 environment(DataAltiExtrapolation_NPL)<- asNamespace('airGR')
 assignInNamespace("DataAltiExtrapolation_Valery", DataAltiExtrapolation_NPL, ns = "airGR")
 ```
-DERIVE HYPSOMETRY
+# DERIVE HYPSOMETRY
 ```{r}
 hypso_df <- read_csv(glue::glue("E:/Project/GR4JCN/hypso/{stn}.csv"))
 
@@ -153,7 +162,7 @@ he <- 3613
 hypso <- c(le,hypso$Elevation,he) 
 ```
 
-#Add Temperature Data to BasinObs
+# Add Temperature Data to BasinObs
 
 ```{r}
 lr <- 0.0052 #Lapse-rate
